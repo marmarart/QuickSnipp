@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.marmarart.QuickSnipp</id>
+  <name>QuickSnipp</name>
+  <summary>Fast snipping tool — capture, annotate, copy</summary>
+  <developer id="io.github.marmarart">
+    <name>Vladimir</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">io.github.marmarart.QuickSnipp.desktop</launchable>
+
+  <description>
+    <p>
+      QuickSnipp is a lightweight snipping tool for Wayland and X11 that
+      stays out of your way: click New Snip, drag a rectangle anywhere on
+      screen — across monitors too — and the capture opens in a small
+      editor.
+    </p>
+    <p>
+      Annotate with pen, arrows, lines, rectangles and text, crop with an
+      adjustable selection, undo and redo your edits, then copy straight to
+      the clipboard with Ctrl+C. Nothing is ever saved to disk unless you
+      press Save.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Click-drag screen capture with multi-monitor support</li>
+      <li>Pen, arrow, line, rectangle and text annotations</li>
+      <li>Adjustable crop with drag handles</li>
+      <li>Undo/redo for the last 15 edits</li>
+      <li>Copy to clipboard with Ctrl+C or the right-click menu</li>
+      <li>Optional PNG export — no files unless you ask for them</li>
+      <li>Works on Wayland (via the XDG portal) and X11</li>
+    </ul>
+  </description>
+
+  <url type="homepage">https://github.com/marmarart/QuickSnipp</url>
+  <url type="bugtracker">https://github.com/marmarart/QuickSnipp/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/marmarart/QuickSnipp/main/docs/screenshot.png</image>
+      <caption>Annotating a snip in the QuickSnipp editor</caption>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1"/>
+
+  <categories>
+    <category>Utility</category>
+    <category>Graphics</category>
+  </categories>
+  <keywords>
+    <keyword>screenshot</keyword>
+    <keyword>snip</keyword>
+    <keyword>capture</keyword>
+    <keyword>snipping</keyword>
+    <keyword>annotate</keyword>
+  </keywords>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <releases>
+    <release version="1.0.0" date="2026-08-15">
+      <description>
+        <p>First stable release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

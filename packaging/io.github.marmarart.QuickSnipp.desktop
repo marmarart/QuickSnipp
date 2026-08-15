@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=QuickSnipp
+Comment=Fast snipping tool — capture, annotate, copy
+Exec=quicksnipp
+Icon=io.github.marmarart.QuickSnipp
+Terminal=false
+Categories=Utility;Graphics;
+Keywords=screenshot;snip;capture;snipping;annotate;
+StartupNotify=true
