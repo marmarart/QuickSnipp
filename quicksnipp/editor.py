@@ -8,15 +8,120 @@ from PyQt6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (QAction, QActionGroup, QColor, QGuiApplication, QIcon,
                          QImage, QKeySequence, QPainter, QPainterPath, QPen,
                          QPixmap)
-from PyQt6.QtWidgets import (QColorDialog, QFileDialog, QInputDialog,
-                             QMainWindow, QMenu, QMessageBox, QScrollArea,
-                             QSpinBox, QToolBar, QToolButton, QWidget)
+from PyQt6.QtWidgets import (QApplication, QColorDialog, QFileDialog, QFrame,
+                             QGridLayout, QHBoxLayout, QInputDialog, QLabel,
+                             QLineEdit, QMainWindow, QMenu, QMessageBox,
+                             QPushButton, QScrollArea, QSizePolicy, QSpinBox,
+                             QToolBar, QToolButton, QVBoxLayout, QWidget)
 
 from .capture import CaptureError, capture_full_desktop
 from .overlay import SnipSession
 
 PEN_WIDTHS = (2, 4, 6, 10)
 DEFAULT_COLOR = "#ff4d4d"
+
+PRESET_COLORS = [
+    ("#ff4d4d", "Red"),
+    ("#ff9933", "Orange"),
+    ("#ffea00", "Yellow"),
+    ("#4cd964", "Green"),
+    ("#4da3ff", "Blue"),
+    ("#b366ff", "Purple"),
+    ("#ffffff", "White"),
+    ("#1b1e23", "Dark"),
+]
+
+
+class HorizontalScrollArea(QScrollArea):
+    """Horizontal scroll area that translates vertical mouse wheel events to horizontal scrolling."""
+
+    def wheelEvent(self, event):
+        if event.angleDelta().y() != 0:
+            delta = event.angleDelta().y()
+            self.horizontalScrollBar().setValue(
+                self.horizontalScrollBar().value() - delta
+            )
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+
+class ColorPaletteWidget(QWidget):
+    color_selected = pyqtSignal(QColor)
+
+    def __init__(self, current_color: QColor, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(6)
+        self._buttons = []
+        self._current_hex = current_color.name().lower()
+
+        for hex_col, name in PRESET_COLORS:
+            btn = QPushButton()
+            btn.setToolTip(f"{name} ({hex_col})")
+            btn.setFixedSize(26, 26)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, c=hex_col: self._on_color_clicked(c))
+            layout.addWidget(btn)
+            self._buttons.append((hex_col.lower(), btn))
+
+        self.custom_btn = QPushButton("🎨")
+        self.custom_btn.setToolTip("Custom Color...")
+        self.custom_btn.setFixedSize(30, 26)
+        self.custom_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.custom_btn.setStyleSheet(
+            "QPushButton { background: #232730; color: #fff; border: 1px solid #444c5c; border-radius: 6px; font-size: 14px; } "
+            "QPushButton:hover { background: #2f3542; border-color: #66b3ff; }"
+        )
+        self.custom_btn.clicked.connect(self._pick_custom)
+        layout.addWidget(self.custom_btn)
+
+        self._refresh_styles()
+
+    def _refresh_styles(self):
+        for hex_col, btn in self._buttons:
+            is_active = (hex_col == self._current_hex)
+            border = "2.5px solid #ffffff" if is_active else "1px solid rgba(255,255,255,0.4)"
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {hex_col}; border-radius: 13px; border: {border}; min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; }} "
+                f"QPushButton:hover {{ border: 2px solid #66b3ff; }}"
+            )
+
+    def set_color(self, color: QColor):
+        self._current_hex = color.name().lower()
+        self._refresh_styles()
+
+    def _on_color_clicked(self, hex_col: str):
+        self._current_hex = hex_col.lower()
+        self._refresh_styles()
+        self.color_selected.emit(QColor(hex_col))
+
+    def _pick_custom(self):
+        col = QColorDialog.getColor(QColor(self._current_hex), self, "Select Color")
+        if col.isValid():
+            self.set_color(col)
+            self.color_selected.emit(col)
+
+
+def _snap_point(start: QPoint, pos: QPoint, tool: str, shift_held: bool) -> QPoint:
+    if not shift_held or start is None or pos is None:
+        return pos
+    dx = pos.x() - start.x()
+    dy = pos.y() - start.y()
+    if tool in ("line", "arrow"):
+        dist = math.hypot(dx, dy)
+        angle = math.atan2(dy, dx)
+        step = math.pi / 4  # 45 degrees
+        snapped = round(angle / step) * step
+        return QPoint(int(start.x() + dist * math.cos(snapped)),
+                      int(start.y() + dist * math.sin(snapped)))
+    elif tool in ("rect", "ellipse", "blur"):
+        side = max(abs(dx), abs(dy))
+        sx = 1 if dx >= 0 else -1
+        sy = 1 if dy >= 0 else -1
+        return QPoint(start.x() + sx * side, start.y() + sy * side)
+    return pos
 
 
 class Canvas(QWidget):
@@ -25,12 +130,15 @@ class Canvas(QWidget):
     MAX_HISTORY = 15
 
     image_changed = pyqtSignal()
+    zoom_changed = pyqtSignal(float)
     modified = pyqtSignal()
     copy_requested = pyqtSignal()
+    paste_requested = pyqtSignal()
     save_requested = pyqtSignal()
     discard_requested = pyqtSignal()
 
-    SHAPE_TOOLS = ("line", "arrow", "rect")
+    FREEHAND_TOOLS = ("pen", "highlighter")
+    SHAPE_TOOLS = ("line", "arrow", "rect", "ellipse", "blur")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,9 +146,13 @@ class Canvas(QWidget):
         self.tool = "pen"
         self.color = QColor(DEFAULT_COLOR)
         self.pen_width = 4
+        self.step_counter = 1
+        self.zoom_factor: float = 1.0
         self._stroke: list[QPoint] | None = None
         self._shape_start: QPoint | None = None
         self._shape_end: QPoint | None = None
+        self._text_editor: QLineEdit | None = None
+        self._text_pos: QPoint | None = None
         # crop state: _crop_rect persists after the drag so it can be
         # adjusted; _crop_mode is None (idle) / "draw" / "move" / a handle id
         self._crop_rect: QRect | None = None
@@ -82,18 +194,42 @@ class Canvas(QWidget):
         self._shape_start = None
         self._shape_end = None
         self._clear_crop()
+        if getattr(self, "_text_editor", None) is not None:
+            self._text_editor.deleteLater()
+            self._text_editor = None
         if clear_history:
             self._undo.clear()
             self._redo.clear()
+            self.step_counter = 1
+            self.zoom_factor = 1.0
+            self.zoom_changed.emit(self.zoom_factor)
         self._refresh_size()
         self.update()
         self.image_changed.emit()
+
+    def set_zoom(self, factor: float):
+        factor = max(0.2, min(5.0, factor))
+        if abs(factor - self.zoom_factor) < 0.005:
+            return
+        self.zoom_factor = factor
+        self._refresh_size()
+        if self._crop_rect is not None:
+            self._show_crop_buttons()
+        self.update()
+        self.zoom_changed.emit(self.zoom_factor)
+
+    def _to_image_point(self, pt: QPoint) -> QPoint:
+        if abs(self.zoom_factor - 1.0) < 0.001:
+            return pt
+        return QPoint(int(pt.x() / self.zoom_factor), int(pt.y() / self.zoom_factor))
 
     def _refresh_size(self):
         if self._image is None:
             self.setFixedSize(720, 420)
         else:
-            self.setFixedSize(self._image.size())
+            w = max(1, int(self._image.width() * self.zoom_factor))
+            h = max(1, int(self._image.height() * self.zoom_factor))
+            self.setFixedSize(w, h)
 
     # --- undo / redo ----------------------------------------------------
 
@@ -135,6 +271,10 @@ class Canvas(QWidget):
             p.end()
             return
 
+        p.save()
+        if abs(self.zoom_factor - 1.0) > 0.001:
+            p.scale(self.zoom_factor, self.zoom_factor)
+
         p.drawImage(0, 0, self._image)
 
         if self._stroke and len(self._stroke) > 1:
@@ -151,16 +291,17 @@ class Canvas(QWidget):
             self._draw_shape(p, self.tool, self._shape_start, self._shape_end)
 
         if self._crop_rect is not None:
-            r = self._crop_rect.intersected(self.rect())
+            bounds = self._image.rect()
+            r = self._crop_rect.intersected(bounds)
             # dim everything outside the crop rect
             shade = QColor(0, 0, 0, 130)
-            p.fillRect(QRect(0, 0, self.width(), r.top()), shade)
-            p.fillRect(QRect(0, r.bottom() + 1, self.width(),
-                             self.height() - r.bottom() - 1), shade)
+            p.fillRect(QRect(0, 0, bounds.width(), r.top()), shade)
+            p.fillRect(QRect(0, r.bottom() + 1, bounds.width(),
+                             bounds.height() - r.bottom() - 1), shade)
             p.fillRect(QRect(0, r.top(), r.left(), r.height() + 1), shade)
             p.fillRect(QRect(r.right() + 1, r.top(),
-                             self.width() - r.right() - 1, r.height() + 1), shade)
-            pen = QPen(QColor("#4da3ff"), 1, Qt.PenStyle.DashLine)
+                             bounds.width() - r.right() - 1, r.height() + 1), shade)
+            pen = QPen(QColor("#4da3ff"), 1.0 / self.zoom_factor, Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.drawRect(r)
             p.setPen(QColor("#4da3ff"))
@@ -168,13 +309,33 @@ class Canvas(QWidget):
                        f"{r.width()} × {r.height()}")
             # resize handles (only when not mid-drag)
             if self._crop_mode is None:
-                p.setPen(QPen(QColor("#4da3ff"), 1))
+                p.setPen(QPen(QColor("#4da3ff"), 1.0 / self.zoom_factor))
                 p.setBrush(QColor("#ffffff"))
+                h_size = max(6, int(8 / self.zoom_factor))
+                h_half = h_size // 2
                 for c in self._handle_points(r).values():
-                    p.drawRect(QRect(c.x() - 4, c.y() - 4, 8, 8))
+                    p.drawRect(QRect(c.x() - h_half, c.y() - h_half, h_size, h_size))
+
+        p.restore()
         p.end()
 
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.set_zoom(self.zoom_factor * 1.15)
+            elif delta < 0:
+                self.set_zoom(self.zoom_factor / 1.15)
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
     def _pen(self) -> QPen:
+        if self.tool == "highlighter":
+            c = QColor(self.color)
+            c.setAlpha(110)
+            return QPen(c, max(14, self.pen_width * 3), Qt.PenStyle.SolidLine,
+                        Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         pen = QPen(self.color, self.pen_width, Qt.PenStyle.SolidLine,
                    Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         return pen
@@ -183,6 +344,15 @@ class Canvas(QWidget):
     def _draw_shape(p: QPainter, tool: str, start: QPoint, end: QPoint):
         if tool == "rect":
             p.drawRect(QRect(start, end).normalized())
+            return
+        if tool == "ellipse":
+            p.drawEllipse(QRect(start, end).normalized())
+            return
+        if tool == "blur":
+            r = QRect(start, end).normalized()
+            p.setPen(QPen(QColor("#4da3ff"), 1, Qt.PenStyle.DashLine))
+            p.drawRect(r)
+            p.fillRect(r, QColor(0, 0, 0, 80))
             return
         p.drawLine(start, end)
         if tool == "arrow":
@@ -194,31 +364,87 @@ class Canvas(QWidget):
                                end.y() + head * math.sin(angle + offset))
                 p.drawLine(tip, wing)
 
+    def _apply_blur(self, rect: QRect):
+        if self._image is None:
+            return
+        r = rect.intersected(self._image.rect())
+        if r.width() < 4 or r.height() < 4:
+            return
+        self._push_undo()
+        sub = self._image.copy(r)
+        block_size = max(6, self.pen_width * 2)
+        small_w = max(1, r.width() // block_size)
+        small_h = max(1, r.height() // block_size)
+        pixelated = sub.scaled(small_w, small_h,
+                               Qt.AspectRatioMode.IgnoreAspectRatio,
+                               Qt.TransformationMode.FastTransformation)
+        pixelated = pixelated.scaled(r.width(), r.height(),
+                                     Qt.AspectRatioMode.IgnoreAspectRatio,
+                                     Qt.TransformationMode.FastTransformation)
+        p = QPainter(self._image)
+        p.drawImage(r.topLeft(), pixelated)
+        p.end()
+        self.modified.emit()
+
+    def _place_step_badge(self, pos: QPoint):
+        if self._image is None:
+            return
+        self._push_undo()
+        p = QPainter(self._image)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        radius = max(13, 10 + self.pen_width)
+        circle_rect = QRect(pos.x() - radius, pos.y() - radius, radius * 2, radius * 2)
+
+        # Draw circle badge with border
+        p.setPen(QPen(QColor(255, 255, 255, 220), 1.5))
+        p.setBrush(self.color)
+        p.drawEllipse(circle_rect)
+
+        # Text color based on luminance
+        lum = 0.299 * self.color.red() + 0.587 * self.color.green() + 0.114 * self.color.blue()
+        text_color = QColor("#101318") if lum > 150 else QColor("#ffffff")
+        p.setPen(text_color)
+        font = p.font()
+        font.setPixelSize(max(10, int(radius * 1.1)))
+        font.setBold(True)
+        p.setFont(font)
+        p.drawText(circle_rect, Qt.AlignmentFlag.AlignCenter, str(self.step_counter))
+        p.end()
+
+        self.step_counter += 1
+        self.modified.emit()
+        self.update()
+
     # --- mouse handling -------------------------------------------------------
 
     def mousePressEvent(self, event):
         if self._image is None or event.button() != Qt.MouseButton.LeftButton:
             return
-        pos = event.position().toPoint()
-        if self.tool == "pen":
+        if getattr(self, "_text_editor", None) is not None:
+            self._commit_text()
+        pos = self._to_image_point(event.position().toPoint())
+        if self.tool in self.FREEHAND_TOOLS:
             self._stroke = [pos]
             self.update()
         elif self.tool in self.SHAPE_TOOLS:
             self._shape_start = pos
             self._shape_end = pos
             self.update()
+        elif self.tool == "step":
+            self._place_step_badge(pos)
         elif self.tool == "crop":
             self._crop_press(pos)
         elif self.tool == "text":
             self._place_text(pos)
 
     def mouseMoveEvent(self, event):
-        pos = event.position().toPoint()
+        pos = self._to_image_point(event.position().toPoint())
         if self._stroke is not None:
             self._stroke.append(pos)
             self.update()
         elif self._shape_start is not None:
-            self._shape_end = pos
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self._shape_end = _snap_point(self._shape_start, pos, self.tool, shift)
             self.update()
         elif self._crop_mode is not None:
             self._crop_drag(pos)
@@ -228,7 +454,7 @@ class Canvas(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pos = event.position().toPoint()
+        pos = self._to_image_point(event.position().toPoint())
         if self._stroke is not None:
             self._stroke.append(pos)
             if len(self._stroke) > 1:
@@ -246,16 +472,21 @@ class Canvas(QWidget):
             self.update()
         elif self._shape_start is not None:
             start = self._shape_start
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            end_pos = _snap_point(start, pos, self.tool, shift)
             self._shape_start = None
             self._shape_end = None
-            if start is not None and start != pos:
-                self._push_undo()
-                p = QPainter(self._image)
-                p.setRenderHint(QPainter.RenderHint.Antialiasing)
-                p.setPen(self._pen())
-                self._draw_shape(p, self.tool, start, pos)
-                p.end()
-                self.modified.emit()
+            if start is not None and start != end_pos:
+                if self.tool == "blur":
+                    self._apply_blur(QRect(start, end_pos).normalized())
+                else:
+                    self._push_undo()
+                    p = QPainter(self._image)
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    p.setPen(self._pen())
+                    self._draw_shape(p, self.tool, start, end_pos)
+                    p.end()
+                    self.modified.emit()
             self.update()
         elif self._crop_mode is not None:
             self._crop_release(pos)
@@ -285,7 +516,7 @@ class Canvas(QWidget):
         self.update()
 
     def _crop_drag(self, pos: QPoint):
-        bounds = self.rect()
+        bounds = self._image.rect() if self._image else self.rect()
         if self._crop_mode == "draw":
             r = QRect(self._crop_anchor, pos).normalized()
         elif self._crop_mode == "move":
@@ -332,9 +563,12 @@ class Canvas(QWidget):
         }
 
     def _hit_handle(self, pos: QPoint) -> str | None:
+        if self._crop_rect is None:
+            return None
+        hit_dist = max(self.HANDLE_HIT, int(self.HANDLE_HIT / self.zoom_factor))
         for name, center in self._handle_points(self._crop_rect).items():
-            if abs(pos.x() - center.x()) <= self.HANDLE_HIT \
-                    and abs(pos.y() - center.y()) <= self.HANDLE_HIT:
+            if abs(pos.x() - center.x()) <= hit_dist \
+                    and abs(pos.y() - center.y()) <= hit_dist:
                 return name
         return None
 
@@ -380,17 +614,19 @@ class Canvas(QWidget):
             self.update()
 
     def _show_crop_buttons(self):
-        if self._crop_rect is None:
+        if self._crop_rect is None or self._image is None:
             return
         r = self._crop_rect
+        img_w = self._image.width()
+        img_h = self._image.height()
         y = r.bottom() + 8
-        if y + 34 > self.height():
+        if y + 34 > img_h:
             y = r.top() - 38
         y = max(4, y)
-        x = min(r.right() - 64, self.width() - 68)
+        x = min(r.right() - 64, img_w - 68)
         x = max(4, x)
-        self._crop_cancel.move(x, y)
-        self._crop_ok.move(x + 34, y)
+        self._crop_cancel.move(int(x * self.zoom_factor), int(y * self.zoom_factor))
+        self._crop_ok.move(int((x + 34) * self.zoom_factor), int(y * self.zoom_factor))
         self._crop_cancel.show()
         self._crop_ok.show()
         self._crop_ok.raise_()
@@ -408,30 +644,68 @@ class Canvas(QWidget):
         super().keyPressEvent(event)
 
     def _place_text(self, pos: QPoint):
-        text, ok = QInputDialog.getText(self, "Add text", "Text:")
-        if not ok or not text:
+        self._commit_text()
+        editor = QLineEdit(self)
+        editor.setStyleSheet(
+            f"background: #14161a; color: {self.color.name()}; "
+            f"border: 1px dashed #4da3ff; border-radius: 3px; padding: 2px 4px;"
+        )
+        font = editor.font()
+        font_pixel = max(14, int((16 + self.pen_width * 2) * self.zoom_factor))
+        font.setPixelSize(font_pixel)
+        font.setBold(True)
+        editor.setFont(font)
+        editor.setMinimumWidth(120)
+
+        screen_pos = QPoint(int(pos.x() * self.zoom_factor), int(pos.y() * self.zoom_factor))
+        editor.move(screen_pos)
+        editor.show()
+        editor.setFocus()
+
+        self._text_pos = pos
+        self._text_editor = editor
+        editor.returnPressed.connect(self._commit_text)
+
+    def _commit_text(self):
+        if getattr(self, "_text_editor", None) is None or self._image is None:
+            return
+        editor = self._text_editor
+        text = editor.text().strip()
+        pos = getattr(self, "_text_pos", None)
+        self._text_editor = None
+        editor.deleteLater()
+        if not text or pos is None:
+            self.update()
             return
         self._push_undo()
         p = QPainter(self._image)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         font = p.font()
-        font.setPixelSize(20 + self.pen_width)
+        font.setPixelSize(16 + self.pen_width * 2)
         font.setBold(True)
         p.setFont(font)
         p.setPen(self.color)
-        p.drawText(pos, text)
+        metrics = p.fontMetrics()
+        p.drawText(pos.x(), pos.y() + metrics.ascent(), text)
         p.end()
         self.modified.emit()
         self.update()
 
     def cancel_pending(self) -> bool:
-        """Abort any in-progress drag or pending crop. True if one existed."""
+        """Abort any in-progress drag, pending crop, or active text editing. True if one existed."""
+        had = False
+        if getattr(self, "_text_editor", None) is not None:
+            self._text_editor.deleteLater()
+            self._text_editor = None
+            had = True
         if (self._stroke is not None or self._shape_start is not None
                 or self._crop_rect is not None or self._crop_mode is not None):
             self._stroke = None
             self._shape_start = None
             self._shape_end = None
             self._clear_crop()
+            had = True
+        if had:
             self.update()
             return True
         return False
@@ -442,13 +716,15 @@ class Canvas(QWidget):
     # --- context menu ---------------------------------------------------------
 
     def contextMenuEvent(self, event):
-        if self._image is None:
-            return
         menu = QMenu(self)
-        menu.addAction("Copy", QKeySequence("Ctrl+C"), self.copy_requested.emit)
-        menu.addAction("Save…", QKeySequence("Ctrl+S"), self.save_requested.emit)
-        menu.addSeparator()
-        menu.addAction("Discard", self.discard_requested.emit)
+        if self._image is not None:
+            menu.addAction("Copy", QKeySequence("Ctrl+C"), self.copy_requested.emit)
+            menu.addAction("Save…", QKeySequence("Ctrl+S"), self.save_requested.emit)
+            menu.addSeparator()
+        menu.addAction("Paste", QKeySequence("Ctrl+V"), self.paste_requested.emit)
+        if self._image is not None:
+            menu.addSeparator()
+            menu.addAction("Discard", self.discard_requested.emit)
         menu.exec(event.globalPos())
 
 
@@ -456,140 +732,469 @@ class EditorWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("QuickSnipp")
-        self.resize(1024, 700)
+        self.resize(960, 680)
 
         self.canvas = Canvas()
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.canvas)
         self.scroll.setWidgetResizable(False)
         self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setCentralWidget(self.scroll)
 
+        # Top horizontally scrollable bar containing all tools, colors & undo/redo
+        top_bar = self._build_top_bar()
+
+        # Bottom Action Bar: Copy/Save on Left, Status in Center, Zoom on Right
+        bottom_bar = QWidget()
+        bottom_bar.setFixedHeight(44)
+        bottom_bar.setStyleSheet("""
+            QWidget#bottom_bar {
+                background: #14161b;
+                border-top: 1px solid #232730;
+            }
+            QPushButton {
+                background: #20242c;
+                color: #e1e4ea;
+                border: 1px solid #333842;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background: #2b313c;
+                border-color: #4da3ff;
+            }
+            QPushButton#copy_btn {
+                background: #0066cc;
+                color: #ffffff;
+                border: 1px solid #1a75ff;
+                font-weight: bold;
+            }
+            QPushButton#copy_btn:hover {
+                background: #0073e6;
+            }
+        """)
+        bottom_bar.setObjectName("bottom_bar")
+        self._build_bottom_bar(bottom_bar)
+
+        main_container = QWidget()
+        main_layout = QVBoxLayout(main_container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(top_bar)
+        main_layout.addWidget(self.scroll, stretch=1)
+        main_layout.addWidget(bottom_bar)
+        self.setCentralWidget(main_container)
+
+        self._build_menu_bar()
+        self.setAcceptDrops(True)
         self._session: SnipSession | None = None
-        self._build_toolbar()
         self._wire_canvas()
-        self.statusBar().showMessage(
-            "Ctrl+N new snip · Ctrl+Z undo · Ctrl+C copy · Ctrl+S save · Esc discard")
+        self._set_status_text("Ctrl+N new snip · Ctrl+V paste · Ctrl+Z undo · Ctrl+C copy · Ctrl+S save · Esc discard")
 
     # --- UI construction ------------------------------------------------------
 
-    def _build_toolbar(self):
-        tb = QToolBar("Tools")
-        tb.setMovable(False)
-        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.addToolBar(tb)
+    def _build_menu_bar(self):
+        mb = self.menuBar()
+        mb.setStyleSheet("""
+            QMenuBar { font-size: 13px; font-weight: 500; padding: 2px 4px; }
+            QMenu { font-size: 13px; padding: 4px; }
+            QMenu::item { padding: 4px 20px; }
+        """)
 
-        act_new = QAction("＋ New Snip", self)
-        act_new.setShortcut(QKeySequence("Ctrl+N"))
-        act_new.triggered.connect(self.start_snip)
-        tb.addAction(act_new)
-        tb.addSeparator()
+        def _add_action(menu, text, slot, shortcut=None):
+            act = QAction(text, self)
+            if shortcut:
+                act.setShortcut(QKeySequence(shortcut))
+            act.triggered.connect(slot)
+            menu.addAction(act)
+            return act
 
-        group = QActionGroup(self)
-        group.setExclusive(True)
+        # File Menu
+        menu_file = mb.addMenu("&File")
+        _add_action(menu_file, "＋ New Snip", self.start_snip, "Ctrl+N")
+        _add_action(menu_file, "📋 Paste Image", self.paste_from_clipboard, "Ctrl+V")
+        _add_action(menu_file, "💾 Save...", self.save_to_file, "Ctrl+S")
+        menu_file.addSeparator()
+        _add_action(menu_file, "✕ Discard", self.discard, "Esc")
+        menu_file.addSeparator()
+        _add_action(menu_file, "Quit", QApplication.quit, "Ctrl+Q")
+
+        # Edit Menu
+        menu_edit = mb.addMenu("&Edit")
+        _add_action(menu_edit, "↶ Undo", self.canvas.undo, "Ctrl+Z")
+        _add_action(menu_edit, "↷ Redo", self.canvas.redo, "Ctrl+Shift+Z")
+        menu_edit.addSeparator()
+        _add_action(menu_edit, "⧉ Copy", self.copy_to_clipboard, "Ctrl+C")
+
+        # Tools Menu
+        menu_tools = mb.addMenu("&Tools")
+        for k, lbl in (("pen", "✏ Pen"), ("highlighter", "🖍 Highlighter"),
+                       ("arrow", "➶ Arrow"), ("line", "╱ Line"),
+                       ("rect", "▭ Rectangle"), ("ellipse", "⬭ Circle"),
+                       ("step", "① Step Badge"), ("text", "🅣 Text"),
+                       ("blur", "░ Blur / Pixelate"), ("crop", "⬚ Crop")):
+            _add_action(menu_tools, lbl, lambda checked=False, t=k: self._set_tool_and_check(t))
+
+        # View Menu
+        menu_view = mb.addMenu("&View")
+        _add_action(menu_view, "Zoom In", self._zoom_in, "Ctrl++")
+        _add_action(menu_view, "Zoom Out", self._zoom_out, "Ctrl+-")
+        _add_action(menu_view, "Fit to Window", self._zoom_fit, "Ctrl+0")
+        _add_action(menu_view, "Actual Size (100%)", self._zoom_100, "Ctrl+1")
+
+    def _build_top_bar(self) -> QWidget:
+        # Top toolbar inside a horizontal scroll area (translates vertical mouse wheel to horizontal scroll)
+        self.top_scroll = HorizontalScrollArea()
+        self.top_scroll.setFixedHeight(56)
+        self.top_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.top_scroll.setWidgetResizable(True)
+        self.top_scroll.setStyleSheet("""
+            QScrollArea {
+                background: #14161b;
+                border-bottom: 1px solid #232730;
+            }
+            QScrollBar:horizontal {
+                height: 4px;
+                background: #14161b;
+            }
+            QScrollBar::handle:horizontal {
+                background: #3d4454;
+                border-radius: 2px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #4da3ff;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+        """)
+
+        container = QWidget()
+        container.setStyleSheet("""
+            QToolButton, QPushButton {
+                background: #1c1f26;
+                color: #e1e4ea;
+                border: 1px solid #2d3340;
+                border-radius: 6px;
+                padding: 5px 11px;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QToolButton:hover, QPushButton:hover {
+                background: #272c37;
+                border-color: #4da3ff;
+            }
+            QToolButton:checked {
+                background: #0066cc;
+                color: #ffffff;
+                border-color: #3385ff;
+                font-weight: bold;
+            }
+            QToolButton#snip_btn {
+                background: #1a4473;
+                color: #ffffff;
+                border: 1px solid #2b619e;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 5px 14px;
+            }
+            QToolButton#snip_btn:hover {
+                background: #205691;
+                border-color: #4da3ff;
+            }
+        """)
+        c_layout = QHBoxLayout(container)
+        c_layout.setContentsMargins(10, 8, 10, 8)
+        c_layout.setSpacing(6)
+
+        # ＋ New Snip
+        btn_snip = QToolButton()
+        btn_snip.setObjectName("snip_btn")
+        btn_snip.setText("＋ New Snip")
+        btn_snip.setShortcut(QKeySequence("Ctrl+N"))
+        btn_snip.setFixedHeight(34)
+        btn_snip.clicked.connect(self.start_snip)
+        c_layout.addWidget(btn_snip)
+
+        # Separator line
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        sep1.setStyleSheet("color: #232730;")
+        c_layout.addWidget(sep1)
+
+        # 10 Tool buttons in a horizontal row
         self.tool_actions = {}
-        for key, label in (("pen", "✏ Pen"), ("arrow", "➶ Arrow"),
-                           ("line", "╱ Line"), ("rect", "▭ Rect"),
-                           ("text", "🅣 Text"), ("crop", "⬚ Crop")):
+        self.tool_buttons = {}
+
+        for key, label in (("pen", "✏ Pen"), ("highlighter", "🖍 Highlight"),
+                           ("arrow", "➶ Arrow"), ("line", "╱ Line"),
+                           ("rect", "▭ Rect"), ("ellipse", "⬭ Circle"),
+                           ("step", "① Step"), ("text", "🅣 Text"),
+                           ("blur", "░ Blur"), ("crop", "⬚ Crop")):
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setCheckable(True)
+            btn.setFixedHeight(34)
+            btn.clicked.connect(lambda checked=False, k=key: self._set_tool(k))
+            c_layout.addWidget(btn)
+            self.tool_buttons[key] = btn
+
             act = QAction(label, self)
             act.setCheckable(True)
             act.triggered.connect(lambda checked=False, k=key: self._set_tool(k))
-            group.addAction(act)
-            tb.addAction(act)
             self.tool_actions[key] = act
+
+        self.tool_buttons["pen"].setChecked(True)
         self.tool_actions["pen"].setChecked(True)
 
-        self.color_button = QToolButton()
-        self.color_button.setText("Color")
-        self.color_button.clicked.connect(self._pick_color)
-        tb.addWidget(self.color_button)
-        self._update_color_button()
+        # Separator
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setStyleSheet("color: #232730;")
+        c_layout.addWidget(sep2)
 
-        tb.addWidget(self._make_width_spin())
-        tb.addSeparator()
+        # Colors & Width
+        self.color_palette = ColorPaletteWidget(self.canvas.color)
+        self.color_palette.color_selected.connect(self._on_palette_color_selected)
+        c_layout.addWidget(self.color_palette)
 
-        act_undo = QAction("↶ Undo", self)
-        act_undo.setShortcut(QKeySequence("Ctrl+Z"))
-        act_undo.triggered.connect(self.canvas.undo)
-        tb.addAction(act_undo)
+        c_layout.addWidget(self._make_width_spin())
 
-        act_redo = QAction("↷ Redo", self)
-        act_redo.setShortcuts([QKeySequence("Ctrl+Shift+Z"),
-                               QKeySequence("Ctrl+Y")])
-        act_redo.triggered.connect(self.canvas.redo)
-        tb.addAction(act_redo)
-        tb.addSeparator()
+        # Separator
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.Shape.VLine)
+        sep3.setStyleSheet("color: #232730;")
+        c_layout.addWidget(sep3)
 
-        act_copy = QAction("⧉ Copy", self)
-        act_copy.setShortcut(QKeySequence("Ctrl+C"))
-        act_copy.triggered.connect(self.copy_to_clipboard)
-        tb.addAction(act_copy)
+        # Undo / Redo
+        btn_undo = QPushButton("↶ Undo")
+        btn_undo.setToolTip("Undo (Ctrl+Z)")
+        btn_undo.setFixedHeight(34)
+        btn_undo.clicked.connect(self.canvas.undo)
+        c_layout.addWidget(btn_undo)
 
-        act_save = QAction("💾 Save", self)
-        act_save.setShortcut(QKeySequence("Ctrl+S"))
-        act_save.triggered.connect(self.save_to_file)
-        tb.addAction(act_save)
+        btn_redo = QPushButton("↷ Redo")
+        btn_redo.setToolTip("Redo (Ctrl+Shift+Z)")
+        btn_redo.setFixedHeight(34)
+        btn_redo.clicked.connect(self.canvas.redo)
+        c_layout.addWidget(btn_redo)
 
-        act_discard = QAction("✕ Discard", self)
-        act_discard.setShortcut(QKeySequence("Esc"))
-        act_discard.triggered.connect(self.discard)
-        tb.addAction(act_discard)
+        c_layout.addStretch(1)
+
+        self.top_scroll.setWidget(container)
+        return self.top_scroll
+
+    def _build_bottom_bar(self, bottom_bar: QWidget):
+        b_layout = QHBoxLayout(bottom_bar)
+        b_layout.setContentsMargins(12, 6, 12, 6)
+        b_layout.setSpacing(8)
+
+        # Bottom Left: Primary Action Buttons
+        self.btn_copy = QPushButton("⧉ Copy (Ctrl+C)")
+        self.btn_copy.setObjectName("copy_btn")
+        self.btn_copy.setFixedHeight(36)
+        self.btn_copy.clicked.connect(self.copy_to_clipboard)
+        b_layout.addWidget(self.btn_copy)
+
+        self.btn_save = QPushButton("💾 Save (Ctrl+S)")
+        self.btn_save.setFixedHeight(36)
+        self.btn_save.clicked.connect(self.save_to_file)
+        b_layout.addWidget(self.btn_save)
+
+        self.btn_paste = QPushButton("📋 Paste (Ctrl+V)")
+        self.btn_paste.setFixedHeight(36)
+        self.btn_paste.clicked.connect(self.paste_from_clipboard)
+        b_layout.addWidget(self.btn_paste)
+
+        self.btn_discard = QPushButton("✕ Discard (Esc)")
+        self.btn_discard.setFixedHeight(36)
+        self.btn_discard.clicked.connect(self.discard)
+        b_layout.addWidget(self.btn_discard)
+
+        b_layout.addSpacing(12)
+
+        # Center: Status & Helpful Hints
+        self._status_label = QLabel("Ctrl+N new snip · Draw, then copy or save")
+        self._status_label.setStyleSheet("color: #8e98a8; font-size: 13px;")
+        b_layout.addWidget(self._status_label, stretch=1)
+
+        # Bottom Right: Zoom Controls
+        btn_zoom_out = QPushButton("－")
+        btn_zoom_out.setToolTip("Zoom Out (Ctrl+-)")
+        btn_zoom_out.setFixedSize(30, 30)
+        btn_zoom_out.setStyleSheet("font-size: 16px; font-weight: bold; padding: 0;")
+        btn_zoom_out.clicked.connect(self._zoom_out)
+        b_layout.addWidget(btn_zoom_out)
+
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setStyleSheet("color: #9aa4b0; font-weight: bold; font-size: 14px; padding: 0 6px;")
+        b_layout.addWidget(self._zoom_label)
+
+        btn_zoom_in = QPushButton("＋")
+        btn_zoom_in.setToolTip("Zoom In (Ctrl++)")
+        btn_zoom_in.setFixedSize(30, 30)
+        btn_zoom_in.setStyleSheet("font-size: 16px; font-weight: bold; padding: 0;")
+        btn_zoom_in.clicked.connect(self._zoom_in)
+        b_layout.addWidget(btn_zoom_in)
+
+        btn_zoom_fit = QPushButton("Fit")
+        btn_zoom_fit.setToolTip("Fit to Window (Ctrl+0)")
+        btn_zoom_fit.setFixedHeight(30)
+        btn_zoom_fit.setStyleSheet("font-size: 12px; font-weight: bold;")
+        btn_zoom_fit.clicked.connect(self._zoom_fit)
+        b_layout.addWidget(btn_zoom_fit)
+
+        btn_zoom_100 = QPushButton("1:1")
+        btn_zoom_100.setToolTip("Actual Size 100% (Ctrl+1)")
+        btn_zoom_100.setFixedHeight(30)
+        btn_zoom_100.setStyleSheet("font-size: 12px; font-weight: bold;")
+        btn_zoom_100.clicked.connect(self._zoom_100)
+        b_layout.addWidget(btn_zoom_100)
 
     def _make_width_spin(self) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(1, 20)
         spin.setValue(4)
         spin.setPrefix("Width ")
+        spin.setFixedHeight(34)
+        spin.setStyleSheet("""
+            QSpinBox {
+                background: #1c1f26;
+                color: #e1e4ea;
+                border: 1px solid #2d3340;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QSpinBox:hover {
+                border-color: #4da3ff;
+            }
+        """)
         spin.valueChanged.connect(lambda v: setattr(self.canvas, "pen_width", v))
         return spin
 
     def _wire_canvas(self):
         self.canvas.copy_requested.connect(self.copy_to_clipboard)
+        self.canvas.paste_requested.connect(self.paste_from_clipboard)
         self.canvas.save_requested.connect(self.save_to_file)
         self.canvas.discard_requested.connect(self.discard)
         self.canvas.image_changed.connect(self._on_image_changed)
+        self.canvas.zoom_changed.connect(
+            lambda z: self._zoom_label.setText(f"{int(round(z * 100))}%"))
+
+    def _zoom_in(self):
+        self.canvas.set_zoom(self.canvas.zoom_factor * 1.25)
+
+    def _zoom_out(self):
+        self.canvas.set_zoom(self.canvas.zoom_factor / 1.25)
+
+    def _zoom_100(self):
+        self.canvas.set_zoom(1.0)
+
+    def _zoom_fit(self):
+        img = self.canvas.image()
+        if img is None:
+            return
+        vp = self.scroll.viewport().size()
+        vw = max(10, vp.width() - 20)
+        vh = max(10, vp.height() - 20)
+        scale = min(vw / img.width(), vh / img.height(), 1.0)
+        self.canvas.set_zoom(scale)
+
+    def _set_status_text(self, msg: str):
+        if hasattr(self, "_status_label"):
+            self._status_label.setText(msg)
+        self.statusBar().showMessage(msg)
 
     def _on_image_changed(self):
         has = self.canvas.has_image()
-        self.statusBar().showMessage(
-            "Snip loaded — draw, add text or crop, then Ctrl+C to copy"
+        self._set_status_text(
+            "Snip loaded — draw, add text or crop, then click Copy or Ctrl+C"
             if has else
-            "Ctrl+N new snip · Ctrl+Z undo · Ctrl+C copy · Ctrl+S save · Esc discard")
+            "Ctrl+N new snip · Ctrl+V paste · Ctrl+Z undo · Ctrl+C copy · Ctrl+S save · Esc discard")
 
-    # --- tools ----------------------------------------------------------------
+    def _set_tool_and_check(self, tool: str):
+        self._set_tool(tool)
 
     def _set_tool(self, tool: str):
         if tool != "crop" and self.canvas.has_pending_crop():
             self.canvas.cancel_pending()
         self.canvas.tool = tool
+        for k, btn in getattr(self, "tool_buttons", {}).items():
+            btn.setChecked(k == tool)
+        for k, act in getattr(self, "tool_actions", {}).items():
+            act.setChecked(k == tool)
         cursors = {"pen": Qt.CursorShape.CrossCursor,
+                   "highlighter": Qt.CursorShape.CrossCursor,
                    "arrow": Qt.CursorShape.CrossCursor,
                    "line": Qt.CursorShape.CrossCursor,
                    "rect": Qt.CursorShape.CrossCursor,
+                   "ellipse": Qt.CursorShape.CrossCursor,
+                   "step": Qt.CursorShape.PointingHandCursor,
+                   "blur": Qt.CursorShape.CrossCursor,
                    "text": Qt.CursorShape.IBeamCursor,
                    "crop": Qt.CursorShape.CrossCursor}
         self.canvas.setCursor(cursors.get(tool, Qt.CursorShape.ArrowCursor))
         if tool == "crop":
-            self.statusBar().showMessage(
+            self._set_status_text(
                 "Drag a crop area, pull the handles to adjust, then ✓ or Enter to apply")
+        elif tool == "blur":
+            self._set_status_text(
+                "Drag a rectangle over sensitive text or details to pixelate")
+        elif tool == "highlighter":
+            self._set_status_text(
+                "Draw over text to highlight with semi-transparent color")
+        elif tool == "step":
+            self._set_status_text(
+                "Click anywhere on the snip to place numbered step badges (①, ②, ③...)")
+
+    def _on_palette_color_selected(self, color: QColor):
+        self.canvas.color = color
+
+    def _set_preset_color(self, hex_color: str):
+        self.canvas.color = QColor(hex_color)
+        if hasattr(self, "color_palette"):
+            self.color_palette.set_color(self.canvas.color)
 
     def _pick_color(self):
-        color = QColorDialog.getColor(self.canvas.color, self, "Pen color")
-        if color.isValid():
-            self.canvas.color = color
-            self._update_color_button()
-
-    def _update_color_button(self):
-        pm = QPixmap(16, 16)
-        pm.fill(self.canvas.color)
-        self.color_button.setIcon(QIcon(pm))
+        if hasattr(self, "color_palette"):
+            self.color_palette._pick_custom()
 
     # --- snip flow ------------------------------------------------------------
 
-    def start_snip(self):
+    def start_snip(self, copy_to_clipboard: bool = False,
+                   output_path: str | None = None,
+                   exit_on_cancel: bool = False):
+        self._silent_clipboard = copy_to_clipboard
+        self._output_path = output_path
+        self._exit_on_cancel = exit_on_cancel
         self.hide()
         # Give the compositor a moment to actually remove our window.
         QTimer.singleShot(350, self._do_capture)
+
+    def capture_fullscreen(self, copy_to_clipboard: bool = False,
+                           output_path: str | None = None):
+        try:
+            image = capture_full_desktop()
+        except CaptureError as exc:
+            QMessageBox.critical(None, "QuickSnipp", str(exc))
+            QApplication.quit()
+            return
+        if copy_to_clipboard:
+            QGuiApplication.clipboard().setImage(image)
+        if output_path:
+            path = output_path if output_path.lower().endswith(".png") else output_path + ".png"
+            image.save(path, "PNG")
+        if copy_to_clipboard or output_path:
+            QApplication.quit()
+        else:
+            self.canvas.set_image(image)
+            self._restore_window()
 
     def _do_capture(self):
         try:
@@ -608,12 +1213,27 @@ class EditorWindow(QMainWindow):
 
     def _on_snip_accepted(self, image: QImage, rect: QRect):
         self._session = None
-        self.canvas.set_image(image.copy(rect))
-        self._restore_window()
+        cropped = image.copy(rect)
+        if getattr(self, "_silent_clipboard", False):
+            QGuiApplication.clipboard().setImage(cropped)
+        if getattr(self, "_output_path", None):
+            out = self._output_path
+            path = out if out.lower().endswith(".png") else out + ".png"
+            cropped.save(path, "PNG")
+        if getattr(self, "_silent_clipboard", False) or getattr(self, "_output_path", None):
+            QApplication.quit()
+        else:
+            self.canvas.set_image(cropped)
+            self._restore_window()
 
     def _on_snip_canceled(self):
         self._session = None
-        self._restore_window()
+        if (getattr(self, "_exit_on_cancel", False)
+                or getattr(self, "_silent_clipboard", False)
+                or getattr(self, "_output_path", None)):
+            QApplication.quit()
+        else:
+            self._restore_window()
 
     def _restore_window(self):
         self.show()
@@ -628,6 +1248,35 @@ class EditorWindow(QMainWindow):
             return
         QGuiApplication.clipboard().setImage(img)
         self.statusBar().showMessage("Copied to clipboard", 3000)
+
+    def paste_from_clipboard(self):
+        cb = QGuiApplication.clipboard()
+        img = cb.image()
+        if img is not None and not img.isNull():
+            self.canvas.set_image(img)
+            self.statusBar().showMessage("Pasted image from clipboard", 3000)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasImage():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasImage():
+            img = QImage(event.mimeData().imageData())
+            if not img.isNull():
+                self.canvas.set_image(img)
+                self.statusBar().showMessage("Loaded dropped image", 3000)
+                event.acceptProposedAction()
+                return
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                img = QImage(path)
+                if not img.isNull():
+                    self.canvas.set_image(img)
+                    self.statusBar().showMessage(f"Loaded {os.path.basename(path)}", 3000)
+                    event.acceptProposedAction()
+                    return
 
     def save_to_file(self):
         img = self.canvas.image()

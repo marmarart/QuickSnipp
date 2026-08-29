@@ -96,8 +96,42 @@ def apply_dark_palette(app: QApplication):
     app.setPalette(pal)
 
 
-def main() -> int:
-    app = QApplication(sys.argv)
+import argparse
+from PyQt6.QtCore import QTimer
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="quicksnipp",
+        description="QuickSnipp — fast snipping tool for Linux (Wayland and X11)",
+    )
+    parser.add_argument(
+        "-s", "--snip", action="store_true",
+        help="Start interactive snip capture immediately",
+    )
+    parser.add_argument(
+        "-f", "--fullscreen", action="store_true",
+        help="Capture fullscreen immediately",
+    )
+    parser.add_argument(
+        "-c", "--clipboard", action="store_true",
+        help="Copy captured image directly to clipboard and exit",
+    )
+    parser.add_argument(
+        "-d", "--delay", type=float, default=0.0,
+        metavar="SECONDS", help="Delay in seconds before capturing",
+    )
+    parser.add_argument(
+        "-o", "--output", type=str, default=None,
+        metavar="PATH", help="Save captured image directly to PATH",
+    )
+    parser.add_argument(
+        "-v", "--version", action="version", version="QuickSnipp 1.0.0",
+    )
+
+    args = parser.parse_args(argv)
+
+    app = QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
     app.setApplicationName("QuickSnipp")
     app.setOrganizationName("QuickSnipp")
     app.setStyle("Fusion")
@@ -105,7 +139,28 @@ def main() -> int:
     app.setStyleSheet(QSS)
 
     window = EditorWindow()
-    window.show()
+
+    delay_ms = max(0, int(args.delay * 1000))
+
+    if args.fullscreen:
+        if delay_ms > 0:
+            QTimer.singleShot(delay_ms, lambda: window.capture_fullscreen(
+                copy_to_clipboard=args.clipboard, output_path=args.output))
+        else:
+            window.capture_fullscreen(
+                copy_to_clipboard=args.clipboard, output_path=args.output)
+    elif args.snip or args.clipboard or args.output:
+        if delay_ms > 0:
+            QTimer.singleShot(delay_ms, lambda: window.start_snip(
+                copy_to_clipboard=args.clipboard, output_path=args.output,
+                exit_on_cancel=True))
+        else:
+            window.start_snip(
+                copy_to_clipboard=args.clipboard, output_path=args.output,
+                exit_on_cancel=True)
+    else:
+        window.show()
+
     return app.exec()
 
 

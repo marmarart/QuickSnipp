@@ -41,14 +41,7 @@ modules:
       - install -Dm644 packaging/io.github.marmarart.QuickSnipp.svg
         ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/io.github.marmarart.QuickSnipp.svg
     sources:
-      - type: dir
-        path: quicksnipp
-        dest: quicksnipp
-      - type: dir
-        path: packaging
-        dest: packaging
-      # For the Flathub submission replace the dir source above with:
-      # - type: git
-      #   url: https://github.com/marmarart/QuickSnipp.git
-      #   tag: v1.0.0
-      #   commit: <full commit sha of the tag>
+      - type: git
+        url: https://github.com/marmarart/QuickSnipp.git
+        tag: v1.0.0
+        commit: 13e816ed53ee6b19f904b672774cacff525fbbce

@@ -69,6 +69,14 @@ class SnipSession(QObject):
         if r is not None:
             self._accept(r)
 
+    def cancel_or_reset(self):
+        if self.origin is not None:
+            self.origin = None
+            self.current = None
+            self.repaint_all()
+        else:
+            self.cancel()
+
     def cancel(self):
         if self._finished:
             return
@@ -136,7 +144,7 @@ class _SnipOverlay(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self.session.begin(self._to_virtual(event.position().toPoint()))
         elif event.button() == Qt.MouseButton.RightButton:
-            self.session.cancel()
+            self.session.cancel_or_reset()
 
     def mouseMoveEvent(self, event):
         self.cursor_pos = event.position().toPoint()
@@ -158,7 +166,7 @@ class _SnipOverlay(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            self.session.cancel()
+            self.session.cancel_or_reset()
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.session.confirm()
 

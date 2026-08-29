@@ -65,6 +65,16 @@
   </supports>
 
   <releases>
+    <release version="1.1.0" date="2026-08-29">
+      <description>
+        <p>New annotation tools and UI improvements:</p>
+        <ul>
+          <li>Highlighter, ellipse, step-number badge and blur/pixelate tools</li>
+          <li>Zoom support and shape snapping helpers</li>
+          <li>Reworked toolbar and tool menu</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-08-15">
       <description>
         <p>First stable release.</p>
