@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (QApplication, QColorDialog, QFileDialog, QFrame,
 
 from .capture import CaptureError, capture_full_desktop
 from .overlay import SnipSession
+from .record import RecordError, RecordingBar, start_region_recording
 
 PEN_WIDTHS = (2, 4, 6, 10)
 DEFAULT_COLOR = "#ff4d4d"
@@ -789,8 +790,10 @@ class EditorWindow(QMainWindow):
         self._build_menu_bar()
         self.setAcceptDrops(True)
         self._session: SnipSession | None = None
+        self._rec_session = None
+        self._rec_bar: RecordingBar | None = None
         self._wire_canvas()
-        self._set_status_text("Ctrl+N new snip · Ctrl+V paste · Ctrl+Z undo · Ctrl+C copy · Ctrl+S save · Esc discard")
+        self._set_status_text("Ctrl+N new snip · Ctrl+Shift+R video · Ctrl+V paste · Ctrl+Z undo · Ctrl+C copy · Ctrl+S save · Esc discard")
 
     # --- UI construction ------------------------------------------------------
 
@@ -813,6 +816,7 @@ class EditorWindow(QMainWindow):
         # File Menu
         menu_file = mb.addMenu("&File")
         _add_action(menu_file, "＋ New Snip", self.start_snip, "Ctrl+N")
+        _add_action(menu_file, "⏺ Capture Video", self.start_record, "Ctrl+Shift+R")
         _add_action(menu_file, "📋 Paste Image", self.paste_from_clipboard, "Ctrl+V")
         _add_action(menu_file, "💾 Save...", self.save_to_file, "Ctrl+S")
         menu_file.addSeparator()
@@ -906,6 +910,18 @@ class EditorWindow(QMainWindow):
                 background: #205691;
                 border-color: #4da3ff;
             }
+            QToolButton#record_btn {
+                background: #5c1a1a;
+                color: #ffffff;
+                border: 1px solid #8a2b2b;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 5px 14px;
+            }
+            QToolButton#record_btn:hover {
+                background: #7a2222;
+                border-color: #e53935;
+            }
         """)
         c_layout = QHBoxLayout(container)
         c_layout.setContentsMargins(10, 8, 10, 8)
@@ -919,6 +935,15 @@ class EditorWindow(QMainWindow):
         btn_snip.setFixedHeight(34)
         btn_snip.clicked.connect(self.start_snip)
         c_layout.addWidget(btn_snip)
+
+        btn_record = QToolButton()
+        btn_record.setObjectName("record_btn")
+        btn_record.setText("⏺ Video")
+        btn_record.setToolTip("Capture video of a screen region (Ctrl+Shift+R)")
+        btn_record.setShortcut(QKeySequence("Ctrl+Shift+R"))
+        btn_record.setFixedHeight(34)
+        btn_record.clicked.connect(self.start_record)
+        c_layout.addWidget(btn_record)
 
         # Separator line
         sep1 = QFrame()
@@ -1177,6 +1202,20 @@ class EditorWindow(QMainWindow):
         # Give the compositor a moment to actually remove our window.
         QTimer.singleShot(350, self._do_capture)
 
+    def start_record(self, output_path: str | None = None,
+                     exit_on_cancel: bool = False):
+        if self._rec_session is not None:
+            return
+        # QAction.triggered / QToolButton.clicked pass a bool; ignore it.
+        if not isinstance(output_path, str):
+            output_path = None
+        self._silent_clipboard = False
+        self._output_path = None
+        self._record_output_path = output_path
+        self._exit_on_cancel = exit_on_cancel
+        self.hide()
+        QTimer.singleShot(350, self._do_record_select)
+
     def capture_fullscreen(self, copy_to_clipboard: bool = False,
                            output_path: str | None = None):
         try:
@@ -1239,6 +1278,89 @@ class EditorWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def _do_record_select(self):
+        try:
+            image = capture_full_desktop()
+        except CaptureError as exc:
+            self.show()
+            self.raise_()
+            QMessageBox.critical(self, "QuickSnipp", str(exc))
+            if getattr(self, "_exit_on_cancel", False):
+                QApplication.quit()
+            return
+        session = SnipSession(image, parent=self, confirm_record=True)
+        self._session = session
+        session.region_confirmed.connect(self._on_record_region)
+        session.canceled.connect(self._on_snip_canceled)
+        session.start()
+
+    def _on_record_region(self, virt_rect: QRect):
+        self._session = None
+        QTimer.singleShot(350, lambda: self._begin_recording(QRect(virt_rect)))
+
+    def _begin_recording(self, virt_rect: QRect):
+        try:
+            self._rec_session = start_region_recording(
+                virt_rect, getattr(self, "_record_output_path", None))
+        except RecordError as exc:
+            self._rec_session = None
+            self.show()
+            self.raise_()
+            QMessageBox.critical(self, "QuickSnipp", str(exc))
+            if getattr(self, "_exit_on_cancel", False):
+                QApplication.quit()
+            return
+        bar = RecordingBar()
+        bar.stop_requested.connect(self._stop_recording)
+        bar.place_outside(virt_rect)
+        bar.show()
+        bar.raise_()
+        bar.activateWindow()
+        self._rec_bar = bar
+
+    def _stop_recording(self, notify: bool = True):
+        bar = self._rec_bar
+        self._rec_bar = None
+        if bar is not None:
+            try:
+                bar.stop_requested.disconnect()
+            except TypeError:
+                pass
+            bar.hide()
+            bar.deleteLater()
+        path = None
+        session = self._rec_session
+        self._rec_session = None
+        if session is not None:
+            try:
+                path = session.stop()
+            except Exception as exc:  # noqa: BLE001 - surface encoder errors
+                if notify:
+                    QMessageBox.warning(None, "QuickSnipp",
+                                        f"Recording stopped with an error: {exc}")
+                if getattr(self, "_exit_on_cancel", False):
+                    QApplication.quit()
+                elif notify:
+                    self._restore_window()
+                return
+        if getattr(self, "_exit_on_cancel", False):
+            if path:
+                print(path)
+            QApplication.quit()
+            return
+        if not notify:
+            return
+        self._restore_window()
+        if path:
+            self._set_status_text(f"Saved recording to {path}")
+            QMessageBox.information(
+                self, "QuickSnipp", f"Saved recording to:\n{path}")
+
+    def closeEvent(self, event):
+        if self._rec_session is not None:
+            self._stop_recording(notify=False)
+        super().closeEvent(event)
 
     # --- actions ----------------------------------------------------------------
 

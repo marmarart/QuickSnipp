@@ -21,11 +21,12 @@
       Annotate with pen, arrows, lines, rectangles and text, crop with an
       adjustable selection, undo and redo your edits, then copy straight to
       the clipboard with Ctrl+C. Nothing is ever saved to disk unless you
-      press Save.
+      press Save. Capture Video records a selected region to ~/Videos.
     </p>
     <p>Features:</p>
     <ul>
       <li>Click-drag screen capture with multi-monitor support</li>
+      <li>Region video recording: select an area, then Record / Stop</li>
       <li>Pen, arrow, line, rectangle and text annotations</li>
       <li>Adjustable crop with drag handles</li>
       <li>Undo/redo for the last 15 edits</li>
@@ -57,6 +58,8 @@
     <keyword>capture</keyword>
     <keyword>snipping</keyword>
     <keyword>annotate</keyword>
+    <keyword>record</keyword>
+    <keyword>video</keyword>
   </keywords>
 
   <supports>
@@ -65,6 +68,16 @@
   </supports>
 
   <releases>
+    <release version="1.2.0" date="2026-09-10">
+      <description>
+        <p>Region video recording:</p>
+        <ul>
+          <li>Select a screen region, then click Record to start and Stop to save</li>
+          <li>Saves WebM/MP4 to the Videos folder</li>
+          <li>Works on GNOME, X11 (ffmpeg), and wlroots (wf-recorder)</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-08-29">
       <description>
         <p>New annotation tools and UI improvements:</p>

@@ -25,6 +25,10 @@ finish-args:
   # Screen capture goes through the XDG portal (no extra permission needed).
   # PNG export location.
   - --filesystem=xdg-pictures
+  # Video recordings.
+  - --filesystem=xdg-videos
+  # GNOME region screencast (ignored on other desktops).
+  - --talk-name=org.gnome.Shell.Screencast
 
 modules:
   - name: quicksnipp

@@ -17,12 +17,12 @@ cat > "$DESKTOP_DIR/io.github.marmarart.QuickSnipp.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=QuickSnipp
-Comment=Fast snipping tool — capture, annotate, copy
+Comment=Fast snipping tool — capture, annotate, copy, record
 Exec=$APP_DIR/run.sh %U
 Icon=io.github.marmarart.QuickSnipp
 Terminal=false
 Categories=Utility;Graphics;
-Keywords=screenshot;snip;capture;snipping;annotate;
+Keywords=screenshot;snip;capture;snipping;annotate;record;video;
 StartupNotify=true
 EOF
 

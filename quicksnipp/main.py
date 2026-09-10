@@ -123,10 +123,14 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "-o", "--output", type=str, default=None,
-        metavar="PATH", help="Save captured image directly to PATH",
+        metavar="PATH", help="Save captured image or recording directly to PATH",
     )
     parser.add_argument(
-        "-v", "--version", action="version", version="QuickSnipp 1.0.0",
+        "-r", "--record", action="store_true",
+        help="Start region video recording (select area, then Record)",
+    )
+    parser.add_argument(
+        "-v", "--version", action="version", version="QuickSnipp 1.2.0",
     )
 
     args = parser.parse_args(argv)
@@ -149,6 +153,13 @@ def main(argv=None) -> int:
         else:
             window.capture_fullscreen(
                 copy_to_clipboard=args.clipboard, output_path=args.output)
+    elif args.record:
+        if delay_ms > 0:
+            QTimer.singleShot(delay_ms, lambda: window.start_record(
+                output_path=args.output, exit_on_cancel=True))
+        else:
+            window.start_record(
+                output_path=args.output, exit_on_cancel=True)
     elif args.snip or args.clipboard or args.output:
         if delay_ms > 0:
             QTimer.singleShot(delay_ms, lambda: window.start_snip(

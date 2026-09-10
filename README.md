@@ -8,6 +8,8 @@ you hit **Save**.
 
 - **＋ New Snip** freezes the screen and lets you click-drag a selection —
   the drag can cross monitors freely.
+- **⏺ Video** records a region: drag a box, click **Record**, then **Stop**.
+  Saved as WebM/MP4 under `~/Videos` (GNOME, wlroots via `wf-recorder`, or X11).
 - Edit before you share:
   - **✏ Pen** & **🖍 Highlighter** (semi-transparent marker).
   - **➶ Arrow**, **╱ Line**, **▭ Rect**, **⬭ Circle**.
@@ -85,7 +87,16 @@ You can trigger a snip anytime using your keyboard without opening a terminal or
   - *Want 1:1 square?* Hold `Shift` while dragging.
 - Release the mouse — your snip opens in the editor!
 
-### 2. Annotate & Edit
+### 2. Capture a Video
+- Click **⏺ Video** (or press `Ctrl+Shift+R`).
+- Drag a box over the area you want. The overlay stays up — recording does **not** start yet.
+- Click **Record** (or press `Enter`). Drag again to reselect, or **Cancel** / `Esc` to abort.
+- A small **REC** bar appears with a timer. Click **Stop** (or `Esc`) when you are done.
+- The file is saved to `~/Videos` (timestamped `snipp-…webm` or `.mp4`).
+
+> GNOME (Ubuntu) uses the built-in screencast service. On other Wayland compositors install `wf-recorder`. On X11, `ffmpeg` is used.
+
+### 3. Annotate & Edit
 - **✏ Pen & 🖍 Highlighter:** Draw freehand or highlight text with translucent color.
 - **➶ Arrow & ╱ Line:** Point to things (hold `Shift` for straight 45° angles).
 - **▭ Rect & ⬭ Circle:** Draw boxes or circles around items.
@@ -96,7 +107,7 @@ You can trigger a snip anytime using your keyboard without opening a terminal or
 - **Colors & Width:** Click any of the quick color swatches or change the line width.
 - **Zoom:** Use `Ctrl + MouseWheel`, **＋ / －**, **Fit** (`Ctrl+0`), or **1:1** (`Ctrl+1`).
 
-### 3. Share or Save
+### 4. Share or Save
 - **Ctrl+C** (or click **⧉ Copy**): Copies directly to your clipboard so you can paste (`Ctrl+V`) into Discord, Slack, Telegram, WhatsApp, Email, or Docs.
 - **Ctrl+S** (or click **💾 Save**): Saves a PNG image file to your `~/Pictures` folder.
 - **Paste existing images:** Press `Ctrl+V` or drag-and-drop any image file into QuickSnipp to annotate it.
@@ -110,10 +121,12 @@ You can trigger a snip anytime using your keyboard without opening a terminal or
 |---|---|
 | `./run.sh` | Launch the editor window |
 | `./run.sh -s` | Start snip selection overlay immediately |
+| `./run.sh -r` | Start region video capture (select, then Record) |
 | `./run.sh -f` | Capture fullscreen immediately |
 | `./run.sh -c` | Capture snip & copy directly to clipboard (silent mode) |
 | `./run.sh -d 3 -s` | Wait 3 seconds before capturing (great for tooltips & menus) |
 | `./run.sh -o shot.png` | Capture and save directly to `shot.png` |
+| `./run.sh -r -o clip.webm` | Record a region and save to `clip.webm` |
 
 ---
 
@@ -122,6 +135,7 @@ You can trigger a snip anytime using your keyboard without opening a terminal or
 | Shortcut | Action |
 |---|---|
 | `Ctrl+N` | New snip |
+| `Ctrl+Shift+R` | Capture video of a region |
 | `Ctrl+V` | Paste image from clipboard |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |

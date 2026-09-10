@@ -14,6 +14,8 @@ app = QApplication.instance() or QApplication([])
 
 from quicksnipp.editor import Canvas, EditorWindow, _snap_point
 from quicksnipp.main import main
+from quicksnipp.overlay import SnipSession
+from quicksnipp.record import even_rect, RecordError
 
 
 class TestQuickSnipp(unittest.TestCase):
@@ -113,6 +115,52 @@ class TestQuickSnipp(unittest.TestCase):
         # Test tool switch
         win._set_tool("highlighter")
         self.assertEqual(win.canvas.tool, "highlighter")
+
+    def test_even_rect(self):
+        r = even_rect(QRect(10, 20, 101, 51))
+        self.assertEqual(r.width() % 2, 0)
+        self.assertEqual(r.height() % 2, 0)
+        self.assertEqual(r, QRect(10, 20, 100, 50))
+        with self.assertRaises(RecordError):
+            even_rect(QRect(0, 0, 1, 1))
+
+    def test_snip_mode_accepts_on_release(self):
+        img = QImage(800, 600, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(QColor("#ffffff"))
+        session = SnipSession(img)
+        accepted = []
+        confirmed = []
+        session.accepted.connect(accepted.append)
+        session.region_confirmed.connect(confirmed.append)
+        session.begin(QPoint(10, 10))
+        session.finish(QPoint(200, 150))
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(confirmed, [])
+        self.assertTrue(session._finished)
+
+    def test_record_mode_waits_for_confirm(self):
+        img = QImage(800, 600, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(QColor("#ffffff"))
+        session = SnipSession(img, confirm_record=True)
+        accepted = []
+        confirmed = []
+        session.accepted.connect(accepted.append)
+        session.region_confirmed.connect(confirmed.append)
+        session.begin(QPoint(10, 10))
+        session.finish(QPoint(200, 150))
+        self.assertEqual(accepted, [])
+        self.assertEqual(confirmed, [])
+        self.assertFalse(session._finished)
+        self.assertTrue(session._awaiting_confirm)
+        sel = session.selection_virtual()
+        self.assertIsNotNone(sel)
+        self.assertGreaterEqual(sel.width(), 4)
+        self.assertGreaterEqual(sel.height(), 4)
+        session.confirm()
+        self.assertEqual(accepted, [])
+        self.assertEqual(len(confirmed), 1)
+        self.assertEqual(confirmed[0], sel.intersected(session.virtual))
+        self.assertTrue(session._finished)
 
 
 if __name__ == "__main__":
