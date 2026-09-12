@@ -9,8 +9,8 @@ import shutil
 import subprocess
 import tempfile
 
-from PyQt6.QtCore import QEventLoop, QObject, QTimer, QUrl, pyqtSlot
-from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusVariant
+from PyQt6.QtCore import QEventLoop, QObject, QRect, QTimer, QUrl, pyqtSlot
+from PyQt6.QtDBus import QDBus, QDBusConnection, QDBusMessage, QDBusVariant
 from PyQt6.QtGui import QGuiApplication, QImage, QPainter
 
 
@@ -19,9 +19,12 @@ class CaptureError(RuntimeError):
 
 
 def _on_wayland() -> bool:
-    return bool(os.environ.get("WAYLAND_DISPLAY")) or (
-        os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
-    )
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return True
+    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    return os.path.exists(os.path.join(runtime, "wayland-0"))
 
 
 def _load(path: str):
@@ -50,6 +53,7 @@ class _PortalResponse(QObject):
         self.loop = QEventLoop()
         self.request_path: str | None = None
         self.uri: str | None = None
+        self.code: int | None = None
         self.done = False
 
     @pyqtSlot("QDBusMessage")
@@ -57,6 +61,11 @@ class _PortalResponse(QObject):
         if self.request_path and message.path() != self.request_path:
             return  # another app's portal request
         args = message.arguments()
+        if args:
+            try:
+                self.code = int(args[0])
+            except (TypeError, ValueError):
+                self.code = None
         if len(args) == 2 and args[0] == 0 and isinstance(args[1], dict):
             uri = args[1].get("uri")
             self.uri = str(uri) if uri else None
@@ -83,19 +92,22 @@ def _capture_portal():
     )
     msg.setArguments(["", {"interactive": QDBusVariant(False)}])
     reply = bus.call(msg)
-    if (reply.type() == QDBusMessage.MessageType.ErrorMessage
-            or not reply.arguments()):
+    if reply.type() == QDBusMessage.MessageType.ErrorMessage or not reply.arguments():
         bus.disconnect(None, None, "org.freedesktop.portal.Request",
                        "Response", handler.on_response)
-        return None
+        err = reply.errorMessage() or reply.errorName() or "empty reply"
+        raise CaptureError(err)
 
     handler.request_path = str(reply.arguments()[0])
     QTimer.singleShot(20000, handler.loop.quit)  # safety timeout
     handler.loop.exec()
     bus.disconnect(None, None, "org.freedesktop.portal.Request",
                    "Response", handler.on_response)
-    if not handler.done or not handler.uri:
-        return None
+    if not handler.done:
+        raise CaptureError("screenshot portal timed out")
+    if not handler.uri:
+        raise CaptureError(
+            f"screenshot portal returned no image (code={handler.code})")
     path = QUrl(handler.uri).toLocalFile()
     return _load(path) if path else None
 
@@ -116,7 +128,7 @@ def _capture_gnome_shell():
     msg.setArguments([False, False, path])  # include_cursor, flash, filename
     reply = bus.call(msg)  # default mode is blocking
     if reply.type() == QDBusMessage.MessageType.ErrorMessage:
-        return None
+        raise CaptureError(reply.errorMessage() or reply.errorName())
     args = reply.arguments()
     if not args or not args[0]:
         try:
@@ -124,6 +136,136 @@ def _capture_gnome_shell():
         except OSError:
             pass
         return None
+    return _load(path)
+
+
+def _virtual_desktop() -> QRect | None:
+    app = QGuiApplication.instance()
+    screens = app.screens() if app is not None else []
+    if not screens:
+        return None
+    virt = screens[0].geometry()
+    for s in screens[1:]:
+        virt = virt.united(s.geometry())
+    return virt
+
+
+def _capture_mutter():
+    """One still frame via Mutter ScreenCast + GStreamer.
+
+    GNOME 47+ blocks org.gnome.Shell.Screenshot and silent portal shots
+    ("Screenshot is not allowed" / portal code 2). ScreenCast is already
+    allowed for QuickSnipp video, so a single PipeWire frame works.
+    """
+    if shutil.which("gst-launch-1.0") is None:
+        return None
+    virt = _virtual_desktop()
+    if virt is None or virt.width() < 2 or virt.height() < 2:
+        return None
+    bus = QDBusConnection.sessionBus()
+    if not bus.isConnected():
+        return None
+
+    def call(dest, path, iface, method, args, timeout=15000):
+        msg = QDBusMessage.createMethodCall(dest, path, iface, method)
+        msg.setArguments(args)
+        return bus.call(msg, QDBus.CallMode.Block, timeout)
+
+    reply = call(
+        "org.gnome.Mutter.ScreenCast", "/org/gnome/Mutter/ScreenCast",
+        "org.gnome.Mutter.ScreenCast", "CreateSession", [{}])
+    if reply.type() == QDBusMessage.MessageType.ErrorMessage or not reply.arguments():
+        err = reply.errorName() or ""
+        if "ServiceUnknown" in err or "NameHasNoOwner" in err:
+            return None
+        raise CaptureError(reply.errorMessage() or err or "CreateSession failed")
+    session_path = str(reply.arguments()[0])
+
+    def stop():
+        call("org.gnome.Mutter.ScreenCast", session_path,
+             "org.gnome.Mutter.ScreenCast.Session", "Stop", [], timeout=5000)
+
+    w = virt.width() - (virt.width() % 2)
+    h = virt.height() - (virt.height() % 2)
+    opts = {
+        "is-recording": QDBusVariant(True),
+        "cursor-mode": QDBusVariant(1),
+    }
+    reply = call(
+        "org.gnome.Mutter.ScreenCast", session_path,
+        "org.gnome.Mutter.ScreenCast.Session", "RecordArea",
+        [int(virt.x()), int(virt.y()), int(w), int(h), opts])
+    if reply.type() == QDBusMessage.MessageType.ErrorMessage or not reply.arguments():
+        stop()
+        raise CaptureError(reply.errorMessage() or "RecordArea failed")
+    stream_path = str(reply.arguments()[0])
+
+    class _PwHandler(QObject):
+        def __init__(self):
+            super().__init__()
+            self.node = None
+            self.loop = QEventLoop()
+
+        @pyqtSlot("QDBusMessage")
+        def on_stream(self, message):
+            args = message.arguments()
+            if args:
+                self.node = args[0]
+            if self.loop.isRunning():
+                self.loop.quit()
+
+    handler = _PwHandler()
+    if not bus.connect(None, stream_path, "org.gnome.Mutter.ScreenCast.Stream",
+                       "PipeWireStreamAdded", handler.on_stream):
+        stop()
+        raise CaptureError("could not subscribe to PipeWireStreamAdded")
+    reply = call(
+        "org.gnome.Mutter.ScreenCast", session_path,
+        "org.gnome.Mutter.ScreenCast.Session", "Start", [])
+    if reply.type() == QDBusMessage.MessageType.ErrorMessage:
+        bus.disconnect(None, stream_path, "org.gnome.Mutter.ScreenCast.Stream",
+                       "PipeWireStreamAdded", handler.on_stream)
+        stop()
+        raise CaptureError(reply.errorMessage() or "ScreenCast Start failed")
+    if handler.node is None:
+        QTimer.singleShot(8000, handler.loop.quit)
+        handler.loop.exec()
+    bus.disconnect(None, stream_path, "org.gnome.Mutter.ScreenCast.Stream",
+                   "PipeWireStreamAdded", handler.on_stream)
+    if handler.node is None:
+        stop()
+        raise CaptureError("no PipeWire stream (timed out)")
+
+    fd, path = tempfile.mkstemp(suffix=".png", prefix="quicksnipp-")
+    os.close(fd)
+    cmd = [
+        "gst-launch-1.0", "-q",
+        "pipewiresrc", f"path={handler.node}",
+        "num-buffers=1", "do-timestamp=true",
+        "keepalive-time=1000", "resend-last=true",
+        "!", "videoconvert",
+        "!", "pngenc",
+        "!", "filesink", f"location={path}",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, check=False, timeout=8,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except (subprocess.SubprocessError, OSError) as exc:
+        stop()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise CaptureError(str(exc)) from exc
+    stop()
+    if proc.returncode != 0 or not os.path.isfile(path) or os.path.getsize(path) < 32:
+        detail = (proc.stderr or b"").decode("utf-8", "replace").strip()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise CaptureError(detail or f"gst-launch exit {proc.returncode}")
     return _load(path)
 
 
@@ -206,10 +348,13 @@ def _flatpak_app_id():
 def capture_full_desktop() -> QImage:
     errors = []
     if _on_wayland():
-        backends = (_capture_portal, _capture_gnome_shell, _capture_grim,
-                    _capture_gnome_screenshot, _capture_spectacle)
+        backends = (_capture_portal, _capture_gnome_shell, _capture_mutter,
+                    _capture_grim, _capture_gnome_screenshot, _capture_spectacle,
+                    _capture_x11)
     else:
-        backends = (_capture_x11, _capture_spectacle, _capture_gnome_screenshot)
+        backends = (_capture_portal, _capture_x11, _capture_spectacle,
+                    _capture_gnome_screenshot, _capture_gnome_shell,
+                    _capture_mutter)
     for backend in backends:
         try:
             img = backend()

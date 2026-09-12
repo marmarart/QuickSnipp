@@ -7,4 +7,6 @@ Icon=io.github.marmarart.QuickSnipp
 Terminal=false
 Categories=Utility;Graphics;
 Keywords=screenshot;snip;capture;snipping;annotate;record;video;
-StartupNotify=true
+StartupNotify=false
+StartupWMClass=quicksnipp
+DBusActivatable=false

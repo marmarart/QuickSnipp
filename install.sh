@@ -13,21 +13,26 @@ if [ -f "packaging/io.github.marmarart.QuickSnipp.svg" ]; then
     echo "Installed icon to $ICON_DIR/io.github.marmarart.QuickSnipp.svg"
 fi
 
-cat > "$DESKTOP_DIR/io.github.marmarart.QuickSnipp.desktop" <<EOF
+cat > "$DESKTOP_DIR/quicksnipp.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=QuickSnipp
-Comment=Fast snipping tool — capture, annotate, copy, record
-Exec=$APP_DIR/run.sh %U
+Comment=Fast snipping tool — capture, annotate, copy, record (1.2.0)
+Exec=$APP_DIR/run.sh
+TryExec=$APP_DIR/run.sh
+Path=$APP_DIR
 Icon=io.github.marmarart.QuickSnipp
 Terminal=false
 Categories=Utility;Graphics;
 Keywords=screenshot;snip;capture;snipping;annotate;record;video;
-StartupNotify=true
+StartupNotify=false
+StartupWMClass=quicksnipp
+DBusActivatable=false
 EOF
-
-chmod +x "$DESKTOP_DIR/io.github.marmarart.QuickSnipp.desktop"
-echo "Installed $DESKTOP_DIR/io.github.marmarart.QuickSnipp.desktop"
+chmod +x "$DESKTOP_DIR/quicksnipp.desktop"
+echo "Installed $DESKTOP_DIR/quicksnipp.desktop"
+# Remove the old Flatpak app-id launcher if a previous install left it behind.
+rm -f "$DESKTOP_DIR/io.github.marmarart.QuickSnipp.desktop"
 
 # Refresh icon & desktop database if tools are present
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$DESKTOP_DIR" || true

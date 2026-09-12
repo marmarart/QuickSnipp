@@ -2,7 +2,7 @@
 
 import sys
 
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtGui import QColor, QGuiApplication, QPalette
 from PyQt6.QtWidgets import QApplication
 
 from .editor import EditorWindow
@@ -135,8 +135,13 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
 
+    # Must match quicksnipp.desktop so GNOME Dock groups us as QuickSnipp
+    # (otherwise the window app_id is "python3" and the default Python icon shows).
+    QGuiApplication.setDesktopFileName("quicksnipp")
     app = QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
     app.setApplicationName("QuickSnipp")
+    app.setApplicationDisplayName("QuickSnipp")
+    app.setDesktopFileName("quicksnipp")
     app.setOrganizationName("QuickSnipp")
     app.setStyle("Fusion")
     apply_dark_palette(app)

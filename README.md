@@ -2,14 +2,15 @@
 
 A fast snipping tool for Ubuntu (Wayland and X11). Capture any part of the
 screen, annotate it, and copy it to the clipboard — nothing is saved unless
-you hit **Save**.
+you hit **Save**. **⏺ Video** records a selected region to `~/Videos`.
 
 ## Features
 
 - **＋ New Snip** freezes the screen and lets you click-drag a selection —
   the drag can cross monitors freely.
 - **⏺ Video** records a region: drag a box, click **Record**, then **Stop**.
-  Saved as WebM/MP4 under `~/Videos` (GNOME, wlroots via `wf-recorder`, or X11).
+  Saved as WebM under `~/Videos` on GNOME (Mutter + GStreamer). Fallbacks:
+  `wf-recorder` on wlroots, `ffmpeg` x11grab on X11.
 - Edit before you share:
   - **✏ Pen** & **🖍 Highlighter** (semi-transparent marker).
   - **➶ Arrow**, **╱ Line**, **▭ Rect**, **⬭ Circle**.
@@ -30,9 +31,10 @@ you hit **Save**.
 ## Requirements
 
 - Python 3.10+ with `venv`
-- On Wayland: an XDG desktop portal with the Screenshot interface
-  (preinstalled on Ubuntu GNOME and KDE). Optional fallbacks: `grim`
-  (wlroots), `spectacle` (KDE), `gnome-screenshot`.
+- **GNOME (Ubuntu default):** `gst-launch-1.0` plus PipeWire/VP8/PNG GStreamer
+  plugins (usually already installed). Still frames and video both use the
+  Mutter ScreenCast API — GNOME 47+ blocks the old silent screenshot API.
+- Optional: `grim` (wlroots), `spectacle` (KDE), `wf-recorder`, `ffmpeg` (X11).
 
 ## 🚀 Quick Start (How to Run)
 
@@ -94,7 +96,9 @@ You can trigger a snip anytime using your keyboard without opening a terminal or
 - A small **REC** bar appears with a timer. Click **Stop** (or `Esc`) when you are done.
 - The file is saved to `~/Videos` (timestamped `snipp-…webm` or `.mp4`).
 
-> GNOME (Ubuntu) uses the built-in screencast service. On other Wayland compositors install `wf-recorder`. On X11, `ffmpeg` is used.
+> On Ubuntu GNOME, recording uses Mutter ScreenCast (the same path as the
+> desktop’s built-in recorder). Other Wayland: install `wf-recorder`. X11: `ffmpeg`.
+> There is no microphone or system-audio in this version.
 
 ### 3. Annotate & Edit
 - **✏ Pen & 🖍 Highlighter:** Draw freehand or highlight text with translucent color.
@@ -155,6 +159,7 @@ You can trigger a snip anytime using your keyboard without opening a terminal or
 
 Since QuickSnipp is lightweight and clean, uninstalling is as simple as removing the desktop launcher:
 ```bash
+rm -f ~/.local/share/applications/quicksnipp.desktop
 rm -f ~/.local/share/applications/io.github.marmarart.QuickSnipp.desktop
 rm -f ~/.local/share/icons/hicolor/scalable/apps/io.github.marmarart.QuickSnipp.svg
 ```
@@ -170,11 +175,29 @@ And then delete the project folder. No hidden background services or system bloa
 
 ---
 
+## Privacy & safety
+
+QuickSnipp is a **local** desktop app (MIT). It does not open a network
+connection, does not upload snips or videos, and has no telemetry or accounts.
+
+| What | Where it goes |
+|---|---|
+| Snip / screenshot | RAM only, until you **Copy** or **Save** (`~/Pictures`) |
+| Region video | Written to `~/Videos` only after you click **Stop** |
+| Launch errors | `~/.cache/quicksnipp/last-launch.log` (local) |
+
+Screen capture uses your session’s D-Bus APIs (XDG portal, GNOME Mutter
+ScreenCast). The compositor can still show a permission prompt. Nothing is
+sent off the machine.
+
+This repo is meant to be run from source (`./run.sh` / `./install.sh`). It is
+**not** published on Flathub or the Snap Store yet — those sandboxes make
+region capture and recording unreliable without extra permissions.
+
 ## 💡 Notes
 
-- The first capture on GNOME Wayland may show a brief one-time system prompt or screen flash depending on your GNOME version.
-- **Flatpak on GNOME:** Silent screenshots require a one-time permission grant. If the first snip fails, enable it in GNOME Settings → Apps → QuickSnipp → Screenshots, or run:
-  ```bash
-  flatpak permission-set screenshot screenshot io.github.marmarart.QuickSnipp yes
-  ```
+- On GNOME 47+, silent `org.gnome.Shell.Screenshot` is blocked. QuickSnipp
+  takes a still frame through Mutter ScreenCast instead (same family of API
+  as **Video**). A recording indicator may flash for a moment.
+- The first capture or recording on GNOME Wayland may show a system prompt.
 - Snips live only in memory until you press **Save**.
