@@ -1,0 +1,25 @@
+#!/bin/sh
+# Launcher inside the snap. Classic confinement still uses $SNAP for our
+# bundled Python/Qt/GStreamer, but can talk to the host session bus
+# (Mutter ScreenCast / portals) like the native app.
+set -e
+
+SNAP="${SNAP:-}"
+TRIPLET=""
+for d in "$SNAP"/usr/lib/*-linux-gnu; do
+    if [ -d "$d" ]; then
+        TRIPLET=$(basename "$d")
+        break
+    fi
+done
+
+export PYTHONPATH="${SNAP}/lib/quicksnipp-src${PYTHONPATH:+:$PYTHONPATH}"
+if [ -n "$TRIPLET" ]; then
+    export QT_PLUGIN_PATH="${SNAP}/usr/lib/${TRIPLET}/qt6/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+    export GI_TYPELIB_PATH="${SNAP}/usr/lib/${TRIPLET}/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+    export GST_PLUGIN_PATH="${SNAP}/usr/lib/${TRIPLET}/gstreamer-1.0${GST_PLUGIN_PATH:+:$GST_PLUGIN_PATH}"
+    export LD_LIBRARY_PATH="${SNAP}/usr/lib/${TRIPLET}:${SNAP}/lib/${TRIPLET}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
+
+exec python3 -m quicksnipp.main "$@"

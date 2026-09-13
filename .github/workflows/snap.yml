@@ -1,0 +1,32 @@
+name: Build snap
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+    paths:
+      - "snap/**"
+      - "quicksnipp/**"
+      - "packaging/**"
+      - ".github/workflows/snap.yml"
+
+jobs:
+  snap:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: snapcore/action-build@v1
+        id: build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quicksnipp-snap-${{ matrix.arch }}
+          path: ${{ steps.build.outputs.snap }}

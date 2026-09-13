@@ -58,6 +58,23 @@ Now **QuickSnipp** will appear in your application launcher / app grid just like
 
 ---
 
+### Option 3: Snap (experimental, other PCs)
+
+A **classic** snap is in `snap/` so capture and video can work like the native
+app. It is **not** in the Snap Store yet (classic confinement needs Canonical’s
+manual review). Build or download the `.snap` and install with:
+
+```bash
+# Intel or AMD PC (same file):
+sudo snap install --classic --dangerous quicksnipp_1.2.0_amd64.snap
+# Raspberry Pi 5 / ARM64:
+sudo snap install --classic --dangerous quicksnipp_1.2.0_arm64.snap
+```
+
+Full steps: [SNAP.md](SNAP.md).
+
+---
+
 ## ⌨️ How to Set up Global Shortcut (PrintScreen or Super+Shift+S)
 
 You can trigger a snip anytime using your keyboard without opening a terminal or looking for the app.

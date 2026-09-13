@@ -5,3 +5,9 @@ build-dir/
 .flatpak-builder/
 repo/
 *.flatpak
+*.snap
+*.assert
+parts/
+prime/
+stage/
+squashfs-root/
