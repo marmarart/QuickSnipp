@@ -27,6 +27,26 @@ def _on_wayland() -> bool:
     return os.path.exists(os.path.join(runtime, "wayland-0"))
 
 
+def _desktop_id() -> str:
+    return (os.environ.get("XDG_CURRENT_DESKTOP") or "").lower()
+
+
+def _is_gnome() -> bool:
+    return "gnome" in _desktop_id()
+
+
+def _prefer_grim() -> bool:
+    """Pi OS (labwc), Sway, Hyprland — grim talks wlr-screencopy directly."""
+    if _is_gnome():
+        return False
+    d = _desktop_id()
+    if "kde" in d or "plasma" in d:
+        return False
+    keys = ("labwc", "wayfire", "sway", "hyprland", "wlroots", "river",
+            "lxqt", "lxde")
+    return any(k in d for k in keys) or shutil.which("grim") is not None
+
+
 def _load(path: str):
     img = QImage(path)
     try:
@@ -348,9 +368,18 @@ def _flatpak_app_id():
 def capture_full_desktop() -> QImage:
     errors = []
     if _on_wayland():
-        backends = (_capture_portal, _capture_gnome_shell, _capture_mutter,
-                    _capture_grim, _capture_gnome_screenshot, _capture_spectacle,
-                    _capture_x11)
+        if _is_gnome():
+            backends = (_capture_portal, _capture_gnome_shell, _capture_mutter,
+                        _capture_grim, _capture_gnome_screenshot,
+                        _capture_spectacle, _capture_x11)
+        elif _prefer_grim():
+            # Raspberry Pi OS / wlroots: skip GNOME APIs that hang or deny.
+            backends = (_capture_grim, _capture_portal, _capture_spectacle,
+                        _capture_gnome_screenshot, _capture_x11)
+        else:
+            backends = (_capture_portal, _capture_grim, _capture_spectacle,
+                        _capture_mutter, _capture_gnome_screenshot,
+                        _capture_x11)
     else:
         backends = (_capture_portal, _capture_x11, _capture_spectacle,
                     _capture_gnome_screenshot, _capture_gnome_shell,
@@ -373,4 +402,7 @@ def capture_full_desktop() -> QImage:
                 f"permission once, either in GNOME Settings → Apps → "
                 f"{app_id} → Screenshots, or by running:\n"
                 f"flatpak permission-set screenshot screenshot {app_id} yes")
+    if not hint and _prefer_grim() and shutil.which("grim") is None:
+        hint = ("\n\nOn Raspberry Pi OS / Sway / labwc install grim:\n"
+                "  sudo apt install grim wf-recorder")
     raise CaptureError(f"Could not capture the screen ({detail}){hint}")

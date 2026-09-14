@@ -69,6 +69,10 @@ def _on_wayland() -> bool:
     )
 
 
+def _is_gnome() -> bool:
+    return "gnome" in (os.environ.get("XDG_CURRENT_DESKTOP") or "").lower()
+
+
 def _dbus_call(bus, dest, path, iface, method, args, timeout=15000):
     msg = QDBusMessage.createMethodCall(dest, path, iface, method)
     msg.setArguments(args)
@@ -351,8 +355,14 @@ def start_region_recording(rect: QRect, output_path: str | None = None) -> Recor
     """Start recording `rect` (virtual logical coords) to a file under ~/Videos."""
     rect = even_rect(rect)
     errors: list[str] = []
-    for backend in (_start_mutter_gst, _start_gnome_shell, _start_wf_recorder,
-                    _start_ffmpeg_x11):
+    if _is_gnome():
+        backends = (_start_mutter_gst, _start_gnome_shell, _start_wf_recorder,
+                    _start_ffmpeg_x11)
+    else:
+        # Raspberry Pi OS / Sway / Hyprland: wf-recorder talks to the compositor.
+        backends = (_start_wf_recorder, _start_mutter_gst, _start_gnome_shell,
+                    _start_ffmpeg_x11)
+    for backend in backends:
         try:
             session = backend(rect, output_path, errors)
         except RecordError:
@@ -366,8 +376,8 @@ def start_region_recording(rect: QRect, output_path: str | None = None) -> Recor
     hint = ""
     if _on_wayland():
         hint = ("\n\nOn GNOME, screen recording must be allowed if prompted. "
-                "On other Wayland compositors, install wf-recorder and "
-                "gstreamer1.0-pipewire.")
+                "On Raspberry Pi OS / Sway / labwc, install wf-recorder:\n"
+                "  sudo apt install wf-recorder grim")
     raise RecordError(f"Could not start region recording ({detail}){hint}")
 
 

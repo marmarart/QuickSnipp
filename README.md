@@ -58,6 +58,26 @@ Now **QuickSnipp** will appear in your application launcher / app grid just like
 
 ---
 
+### Raspberry Pi 5 (same repo, not a second copy)
+
+Use **this same folder / same git clone**. There is no separate ARM tree.
+Pi 5 is 64-bit ARM; Intel/AMD PCs are amd64 — Python runs both. Pi OS uses
+**labwc** (not GNOME), so snips go through `grim` and video through `wf-recorder`.
+
+On the Pi (64-bit Raspberry Pi OS or Ubuntu):
+
+```bash
+git clone https://github.com/marmarart/QuickSnipp.git
+cd QuickSnipp
+chmod +x scripts/setup-pi.sh
+./scripts/setup-pi.sh    # installs grim, wf-recorder, PyQt6 (needs sudo)
+./install.sh             # app menu, same as on the PC
+```
+
+Later updates: `git pull` then `./run.sh` — same as the PC.
+
+---
+
 ### Option 3: Snap (experimental, other PCs)
 
 A **classic** snap is in `snap/` so capture and video can work like the native

@@ -13,11 +13,22 @@ fi
 
 if [ ! -x .venv/bin/python ]; then
     echo "Virtualenv missing — creating it..." >&2
-    python3 -m venv .venv 2>/dev/null || python3 -m venv --without-pip .venv
+    arch=$(uname -m)
+    # Pi 5: use distro PyQt6 (pip wheels are huge / may compile for hours).
+    if [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then
+        python3 -m venv --system-site-packages .venv 2>/dev/null \
+            || python3 -m venv --system-site-packages --without-pip .venv
+    else
+        python3 -m venv .venv 2>/dev/null || python3 -m venv --without-pip .venv
+    fi
     if [ ! -x .venv/bin/pip ]; then
         curl -sSL https://bootstrap.pypa.io/get-pip.py | .venv/bin/python
     fi
-    .venv/bin/pip install -r requirements.txt
+    if .venv/bin/python -c "from PyQt6.QtWidgets import QApplication" 2>/dev/null; then
+        echo "Using system PyQt6" >&2
+    else
+        .venv/bin/pip install -r requirements.txt
+    fi
 fi
 
 # Desktop Exec %U can leave empty tokens; argparse would then abort silently.
